@@ -87,7 +87,7 @@ class AutoencoderConfigurator:
         image = self.load_image(image_path)
         return image.size[1], image.size[0], len(image.getbands())
 
-    def generate_autoencoder_code(self, input_height, input_width, input_channels, target_folder=None):
+    def generate_autoencoder_code(self, input_height, input_width, input_channels, target_folder=None, num_epochs=50):
         """Generate PyTorch autoencoder code based on the configuration."""
         if not self.config:
             raise ValueError("Configuration not parsed. Call parse_config_file() first.")
@@ -153,6 +153,8 @@ from torchvision import transforms
 from PIL import Image
 import os
 import numpy as np
+from astropy.io import fits
+import pydicom
 
 class FlexiAutoencoder(nn.Module):
     def __init__(self):
@@ -179,21 +181,50 @@ class ImageDataset(Dataset):
 
     def __getitem__(self, idx):
         input_image_path = os.path.join(self.input_folder, self.input_images[idx])
-        input_image = Image.open(input_image_path).convert("RGB")
+        input_image = self.load_image(input_image_path)
         if self.transform:
             input_image = self.transform(input_image)
 
         if self.target_folder:
             target_image_path = os.path.join(self.target_folder, self.target_images[idx])
-            target_image = Image.open(target_image_path).convert("RGB")
+            target_image = self.load_image(target_image_path)
             if self.transform:
                 target_image = self.transform(target_image)
             return input_image, target_image
         else:
             return input_image, input_image
 
+    def load_image(self, image_path):
+        """Load an image from the given path, supporting FITS, DICOM, and standard formats."""
+        if image_path.lower().endswith(".fits"):
+            # Load FITS file
+            with fits.open(image_path) as hdul:
+                image_data = hdul[0].data
+            # Normalize and convert to 8-bit
+            image_data = (image_data - np.min(image_data)) / (np.max(image_data) - np.min(image_data)) * 255
+            image_data = image_data.astype(np.uint8)
+            if len(image_data.shape) == 2:  # Grayscale
+                image = Image.fromarray(image_data, mode="L")
+            else:  # Multi-channel (e.g., RGB)
+                image = Image.fromarray(image_data, mode="RGB")
+        elif image_path.lower().endswith(".dcm"):
+            # Load DICOM file
+            dicom_data = pydicom.dcmread(image_path)
+            image_data = dicom_data.pixel_array
+            # Normalize and convert to 8-bit
+            image_data = (image_data - np.min(image_data)) / (np.max(image_data) - np.min(image_data)) * 255
+            image_data = image_data.astype(np.uint8)
+            if len(image_data.shape) == 2:  # Grayscale
+                image = Image.fromarray(image_data, mode="L")
+            else:  # Multi-channel (e.g., RGB)
+                image = Image.fromarray(image_data, mode="RGB")
+        else:
+            # Load standard image formats (e.g., PNG, JPEG)
+            image = Image.open(image_path)
+        return image
+
 class AutoencoderWrapper:
-    def __init__(self, input_folder, target_folder=None, batch_size=32, learning_rate=0.001, num_epochs=50):
+    def __init__(self, input_folder, target_folder=None, batch_size=32, learning_rate=0.001, num_epochs={num_epochs}):
         self.input_folder = input_folder
         self.target_folder = target_folder
         self.batch_size = batch_size
@@ -233,10 +264,10 @@ class AutoencoderWrapper:
                 self.optimizer.step()
 
                 if batch_idx % 10 == 0:
-                    print(f"Epoch [{epoch+1}/{self.num_epochs}], Batch [{batch_idx}/{len(self.dataloader)}], Loss: {loss.item():.4f}")
+                    print(f"Epoch [{{epoch+1}}/{{self.num_epochs}}], Batch [{{batch_idx}}/{{len(self.dataloader)}}], Loss: {{loss.item():.4f}}")
 
             # Save the model checkpoint
-            torch.save(self.model.state_dict(), f"autoencoder_epoch_{epoch+1}.pth")
+            torch.save(self.model.state_dict(), f"autoencoder_epoch_{{epoch+1}}.pth")
 
         print("Training complete!")
 
@@ -251,7 +282,7 @@ class AutoencoderWrapper:
                 reconstructed_images = self.model(input_images)
                 loss = self.criterion(reconstructed_images, target_images)
                 total_loss += loss.item()
-        print(f"Test Loss: {total_loss / len(self.dataloader):.4f}")
+        print(f"Test Loss: {{total_loss / len(self.dataloader):.4f}}")
 
     def predict(self, output_folder):
         """Generate predictions (reconstructed or translated images)."""
@@ -265,8 +296,8 @@ class AutoencoderWrapper:
                     image = image.cpu().permute(1, 2, 0).numpy()  # Convert to HWC format
                     image = (image * 255).astype(np.uint8)
                     image = Image.fromarray(image)
-                    image.save(os.path.join(output_folder, f"output_{idx * self.batch_size + i}.png"))
-        print(f"Predictions saved to {output_folder}")
+                    image.save(os.path.join(output_folder, f"output_{{idx * self.batch_size + i}}.png"))
+        print(f"Predictions saved to {{output_folder}}")
 
 if __name__ == "__main__":
     # Example usage
@@ -296,6 +327,9 @@ if __name__ == "__main__":
             target_folder = None
             print("No target folder provided. Generating a traditional autoencoder.")
 
+        # Prompt the user for the number of epochs
+        num_epochs = int(input("Enter the number of epochs to train: ").strip())
+
         # Parse the configuration file
         self.parse_config_file()
 
@@ -303,7 +337,7 @@ if __name__ == "__main__":
         input_height, input_width, input_channels = self.infer_input_dimensions(input_folder)
 
         # Generate the autoencoder code
-        self.generate_autoencoder_code(input_height, input_width, input_channels, target_folder)
+        self.generate_autoencoder_code(input_height, input_width, input_channels, target_folder, num_epochs)
 
 
 if __name__ == "__main__":
